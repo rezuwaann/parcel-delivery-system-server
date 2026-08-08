@@ -11,6 +11,21 @@ const stripe = require('stripe')
 
 
 
+// tracking id
+const crypto = require('crypto');
+
+const generateTrackingId = () => {
+    const prefix = "DX";
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const random = crypto.randomBytes(3).toString("hex").toUpperCase();
+
+    return `${prefix}-${date}-${random}`;
+};
+
+console.log('this is tracking id =', generateTrackingId());
+
+
+
 
 // const middleware
 app.use(express.json())
@@ -37,7 +52,7 @@ async function run() {
 
         const db = client.db("delivery_system_db");
         const parcelsCollection = db.collection('parcels');
-
+        const paymentCollection = db.collection('payments');
 
 
         // parcel api
@@ -96,7 +111,7 @@ async function run() {
                     {
                         // Provide the exact Price ID (for example, price_1234) of the product you want to sell
                         price_data: {
-                            currency: 'BDT',
+                            currency: 'bdt',
                             unit_amount: amount,
                             product_data: {
                                 name: paymentInfo.parcelName
@@ -107,7 +122,10 @@ async function run() {
                 ],
                 customer_email: paymentInfo.senderEmail,
                 mode: 'payment',
-                metadata: { parcelId: paymentInfo.parcelId },
+                metadata: {
+                    parcelId: paymentInfo.parcelId,
+                    parcelName: paymentInfo.parcelName
+                },
                 success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
                 cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
                 // Provide a name (for example, hosted_web_0001) to label this Checkout integration and measure its conversion independently
@@ -118,6 +136,100 @@ async function run() {
             res.send({ url: session.url })
         })
 
+
+        app.patch('/payment-success', async (req, res) => {
+            const sessionId = req.query.session_id;
+            const trackingId = generateTrackingId();
+
+            const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+            const transactionId = session.payment_intent;
+            const amount = session.amount_total;
+
+
+
+            const query = { transactionId: transactionId }
+            const alreadyExists = await paymentCollection.findOne(query);
+
+
+            if (alreadyExists) {
+
+                console.log('already exists')
+                return res.send({
+                    message: "already exists",
+                    transactionId,
+                    trackingId: trackingId,
+                    cost: amount / 100
+                })
+            } else console.log('doesnt existss')
+
+
+
+
+            console.log('session retrieve', session)
+
+            if (session.payment_status === 'paid') {
+                const id = session.metadata.parcelId;
+                const query = { _id: new ObjectId(id) };
+                const update = {
+                    $set: {
+                        paymentStatus: "paid",
+                        trackingId: trackingId
+                    },
+
+
+                }
+
+
+
+
+
+                const result = await parcelsCollection.updateOne(query, update);
+
+
+                const payment = {
+                    cost: amount / 100,
+                    currency: session.currency,
+                    senderEmail: session.customer_email,
+                    parcelId: session.metadata.parcelId,
+                    parcelName: session.metadata.parcelName,
+                    transactionId: session.payment_intent,
+                    paymentStatus: session.payment_status,
+                    trackingId: trackingId,
+                    paidAt: new Date(),
+
+                }
+
+                if (session.payment_status === 'paid') {
+                    const resultPayment = await paymentCollection.insertOne(payment);
+                    res.send({
+                        success: true,
+                        modifyParcel: result,
+                        trackingId: trackingId,
+                        transactionId: session.payment_intent,
+                        paymentInfo: resultPayment
+                    })
+                }
+
+            }
+            res.send({ success: false })
+        })
+
+
+
+        app.get('/payment-history', async (req, res) => {
+
+            const query = {};
+
+            if (req.query.email) {
+                query.senderEmail= req.query.email;
+            }
+
+            const cursor = paymentCollection.find(query)
+            const result = await cursor.toArray();
+            res.send(result)
+
+        })
         // Send a ping to confirm a successful connection
         await client.db("admin").command({ ping: 1 });
         console.log("Pinged your deployment. You successfully connected to MongoDB!");
