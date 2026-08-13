@@ -14,6 +14,19 @@ const stripe = require('stripe')
 // tracking id
 const crypto = require('crypto');
 
+const { getAuth } = require("firebase-admin/auth");
+
+const admin = require("firebase-admin");
+
+const serviceAccount = require("./zapshift-firebase-adminsdk.json");
+
+admin.initializeApp({
+    credential: admin.cert(serviceAccount)
+});
+
+
+
+
 const generateTrackingId = () => {
     const prefix = "DX";
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
@@ -30,6 +43,32 @@ console.log('this is tracking id =', generateTrackingId());
 // const middleware
 app.use(express.json())
 app.use(cors())
+
+
+const verifyFBToken = async (req, res, next) => {
+
+    console.log('headers in the middleware ', req.headers.authorization)
+    const token = req.headers.authorization;
+
+    if (!token) {
+        return res.status(401).send({ message: 'unauthorized access' })
+    }
+
+
+    try {
+        const idToken = token.split(' ')[1];
+        const decoded = await getAuth().verifyIdToken(idToken)
+        console.log('decoded in the token', decoded);
+
+        req.decoded_email = decoded.email;
+
+        next()
+    } catch (error) {
+        return res.status(401).send({ message: 'unauthorized access' })
+    }
+
+
+}
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.atbpap4.mongodb.net/?appName=Cluster0`;
 
@@ -154,7 +193,7 @@ async function run() {
 
             if (alreadyExists) {
 
-                console.log('already exists')
+                // console.log('already exists')
                 return res.send({
                     message: "already exists",
                     transactionId,
@@ -174,7 +213,8 @@ async function run() {
                 const update = {
                     $set: {
                         paymentStatus: "paid",
-                        trackingId: trackingId
+                        trackingId: trackingId,
+                        transactionId: transactionId
                     },
 
 
@@ -217,15 +257,22 @@ async function run() {
 
 
 
-        app.get('/payment-history', async (req, res) => {
+        app.get('/payment-history', verifyFBToken, async (req, res) => {
 
             const query = {};
+            const email = req.query.email;
 
-            if (req.query.email) {
-                query.senderEmail= req.query.email;
+            console.log('headers ', req.headers)
+
+            if (email) {
+                query.senderEmail = email;
+
+                if (email !== req.decoded_email) {
+                    return res.status(403).send({ message: 'forbidden access' });
+                }
             }
 
-            const cursor = paymentCollection.find(query)
+            const cursor = paymentCollection.find(query).sort({ paidAt: -1 })
             const result = await cursor.toArray();
             res.send(result)
 
