@@ -95,7 +95,7 @@ async function run() {
         const userCollection = db.collection('users');
         const ridersCollection = db.collection('riders');
 
-      
+
 
 
         // users related apis
@@ -170,16 +170,16 @@ async function run() {
         })
 
         app.get('/riders', async (req, res) => {
+            const { status, workStatus, district } = req.query;
             const query = {};
+            if (status) query.status = status;
+            if (district) query.district = { $regex: `^${district}$`, $options: 'i' };
+            if (workStatus) query.workStatus = { $regex: `^${workStatus}$`, $options: 'i' };
 
-            if (req.query.status) {
-                query.status = req.query.status;
-            }
-            const cursor = ridersCollection.find(query).sort({ appliedAt: -1 })
-            const result = await cursor.toArray()
-            res.send(result)
-        })
-
+            const cursor = ridersCollection.find(query).sort({ appliedAt: -1 });
+            const result = await cursor.toArray();
+            res.send(result);
+        });
 
         app.patch('/riders/:id', async (req, res) => {
             const status = req.body.status;
@@ -187,7 +187,8 @@ async function run() {
             const query = { _id: new ObjectId(id) }
             const updatedDoc = {
                 $set: {
-                    status: status
+                    status: status,
+                    workStatus: "Unavailable Now"
                 }
             }
 
@@ -216,11 +217,13 @@ async function run() {
         app.get('/parcels', async (req, res) => {
             const query = {};
 
-            const { email } = req.query;
+            const { email, parcelStatus } = req.query;
             if (email) {
-                query.senderEmail = email
+                query.senderEmail = email;
             }
-
+            if (parcelStatus) {
+                query.parcelStatus = parcelStatus;
+            }
 
             const cursor = parcelsCollection.find(query).sort({ createdAt: -1 });
             const result = await cursor.toArray();
@@ -238,6 +241,49 @@ async function run() {
 
 
         })
+
+
+        app.patch('/parcels/:id', async (req, res) => {
+            const { riderId, riderName, riderPhone } = req.body;
+            const id = req.params.id;
+
+            const parcel = await parcelsCollection.findOne({ _id: new ObjectId(id) });
+
+            if (!parcel) {
+                return res.status(404).send({ message: 'Parcel not found' });
+            }
+
+            if (parcel.paymentStatus !== 'paid') {
+                return res.status(400).send({ message: 'Cannot assign a rider to an unpaid parcel' });
+            }
+
+            const query = { _id: new ObjectId(id) };
+            const updatedDoc = {
+                $set: {
+                    parcelStatus: 'rider-assigned',   // was deliveryStatus — must match the field your GET query filters on
+                    riderId: riderId,
+                    riderName: riderName,
+                    riderPhone: riderPhone,
+                },
+            };
+
+            const result = await parcelsCollection.updateOne(query, updatedDoc);
+
+            const riderQuery = { _id: new ObjectId(riderId) };
+            const riderUpdatedDoc = {
+                $set: {
+                    workStatus: 'in-transit',
+                },
+            };
+
+            const riderResult = await ridersCollection.updateOne(riderQuery, riderUpdatedDoc);
+
+            res.send({
+                modifiedCount: result.modifiedCount,
+                riderModifiedCount: riderResult.modifiedCount,
+            });
+        });
+
 
         app.post('/parcels', async (req, res) => {
             const parcel = req.body;
@@ -332,7 +378,8 @@ async function run() {
                     $set: {
                         paymentStatus: "paid",
                         trackingId: trackingId,
-                        transactionId: transactionId
+                        transactionId: transactionId,
+                        parcelStatus: "pendingPickup"
                     },
 
 
