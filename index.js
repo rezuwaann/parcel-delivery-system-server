@@ -18,7 +18,7 @@ const { getAuth } = require("firebase-admin/auth");
 
 const admin = require("firebase-admin");
 
-const serviceAccount = require("./zapshift-firebase-adminsdk.json");
+// const serviceAccount = require("./zapshift-firebase-adminsdk.json");
 
 
 // const serviceAccount = require("./firebase-admin-key.json");
