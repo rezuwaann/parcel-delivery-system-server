@@ -20,6 +20,13 @@ const admin = require("firebase-admin");
 
 const serviceAccount = require("./zapshift-firebase-adminsdk.json");
 
+
+// const serviceAccount = require("./firebase-admin-key.json");
+
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
+const serviceAccount = JSON.parse(decoded);
+
+
 admin.initializeApp({
     credential: admin.cert(serviceAccount)
 });
@@ -170,8 +177,12 @@ async function run() {
         })
 
         app.get('/riders', async (req, res) => {
-            const { status, workStatus, district } = req.query;
+            // 👇 Added email to this line
+            const { status, workStatus, district, email } = req.query;
             const query = {};
+
+            // 👇 Added this email filter
+            if (email) query.email = email;
             if (status) query.status = status;
             if (district) query.district = { $regex: `^${district}$`, $options: 'i' };
             if (workStatus) query.workStatus = { $regex: `^${workStatus}$`, $options: 'i' };
@@ -217,18 +228,26 @@ async function run() {
         app.get('/parcels', async (req, res) => {
             const query = {};
 
-            const { email, parcelStatus } = req.query;
+            // 1. Add riderId here
+            const { email, parcelStatus, paymentStatus, riderId } = req.query;
+
             if (email) {
                 query.senderEmail = email;
             }
             if (parcelStatus) {
                 query.parcelStatus = parcelStatus;
             }
+            if (paymentStatus) {
+                query.paymentStatus = paymentStatus;
+            }
+            // 2. Add riderId filter here
+            if (riderId) {
+                query.riderId = riderId;
+            }
 
             const cursor = parcelsCollection.find(query).sort({ createdAt: -1 });
             const result = await cursor.toArray();
             res.send(result)
-
         })
 
         app.get('/parcels/:id', async (req, res) => {
@@ -284,6 +303,33 @@ async function run() {
             });
         });
 
+        app.patch('/parcels/:id/status', async (req, res) => {
+            const id = req.params.id;
+            const { status } = req.body;
+
+            const validStatuses = ['picked-up', 'in-transit', 'delivered', 'failed-attempt'];
+            if (!validStatuses.includes(status)) {
+                return res.status(400).send({ message: 'Invalid status' });
+            }
+
+            const query = { _id: new ObjectId(id) };
+            const updatedDoc = { $set: { parcelStatus: status } };
+
+            const result = await parcelsCollection.updateOne(query, updatedDoc);
+
+            // free the rider up once the parcel is off their plate
+            if (status === 'delivered' || status === 'failed-attempt') {
+                const parcel = await parcelsCollection.findOne(query);
+                if (parcel?.riderId) {
+                    await ridersCollection.updateOne(
+                        { _id: new ObjectId(parcel.riderId) },
+                        { $set: { workStatus: 'Available' } }
+                    );
+                }
+            }
+
+            res.send(result);
+        });
 
         app.post('/parcels', async (req, res) => {
             const parcel = req.body;
@@ -303,6 +349,35 @@ async function run() {
         })
 
 
+        // tracking
+        // public tracking — no auth, looked up by trackingId not _id
+        app.get('/track/:trackingId', async (req, res) => {
+            const trackingId = req.params.trackingId;
+            const query = { trackingId: trackingId };
+
+            const parcel = await parcelsCollection.findOne(query);
+
+            if (!parcel) {
+                return res.status(404).send({ message: 'No parcel found with this tracking ID' });
+            }
+
+
+            const trackingInfo = {
+                parcelName: parcel.parcelName,
+                parcelType: parcel.parcelType,
+                parcelStatus: parcel.parcelStatus,
+                paymentStatus: parcel.paymentStatus,
+                cost: parcel.cost,
+                senderRegion: parcel.senderRegion,
+                recieverRegion: parcel.recieverRegion,
+                trackingId: parcel.trackingId,
+                createdAt: parcel.createdAt,
+                riderName: parcel.riderName,
+                riderPhone: parcel.riderPhone,
+            };
+
+            res.send(trackingInfo);
+        });
 
 
         // payment related apis
@@ -443,8 +518,8 @@ async function run() {
 
         })
         // Send a ping to confirm a successful connection
-        await client.db("admin").command({ ping: 1 });
-        console.log("Pinged your deployment. You successfully connected to MongoDB!");
+        // await client.db("admin").command({ ping: 1 });
+        // console.log("Pinged your deployment. You successfully connected to MongoDB!");
     } finally {
         // Ensures that the client will close when you finish/error
         // await client.close();
