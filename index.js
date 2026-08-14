@@ -95,6 +95,8 @@ async function run() {
         const userCollection = db.collection('users');
         const ridersCollection = db.collection('riders');
 
+      
+
 
         // users related apis
         app.post('/users', async (req, res) => {
@@ -122,15 +124,36 @@ async function run() {
             res.send(result);
         })
 
-        app.patch('/users/:id', async (req, res) => {
-            const {role} = req.body;
+        app.get('/users/:id', async (req, res) => {
+
             const id = req.params.id;
             const query = { _id: new ObjectId(id) };
-            const updated={
-                $set:{role}
+
+            const result = await userCollection.findOne(query);
+            res.send(result);
+
+
+        })
+        app.get('/user/:email/role', async (req, res) => {
+
+            const email = req.params.email;
+            const query = { email: email };
+
+            const user = await userCollection.findOne(query);
+            res.send({ "role": user?.role });
+
+
+        })
+
+        app.patch('/users/:id', async (req, res) => {
+            const { role } = req.body;
+            const id = req.params.id;
+            const query = { _id: new ObjectId(id) };
+            const updated = {
+                $set: { role }
             }
 
-            const result=await userCollection.updateOne(query,updated);
+            const result = await userCollection.updateOne(query, updated);
             res.send(result)
         })
 
