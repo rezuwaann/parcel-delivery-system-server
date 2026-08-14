@@ -92,6 +92,101 @@ async function run() {
         const db = client.db("delivery_system_db");
         const parcelsCollection = db.collection('parcels');
         const paymentCollection = db.collection('payments');
+        const userCollection = db.collection('users');
+        const ridersCollection = db.collection('riders');
+
+
+        // users related apis
+        app.post('/users', async (req, res) => {
+            const user = req.body;
+
+            user.role = 'user';
+            user.createdAt = new Date();
+
+            const email = user.email;
+            const userExist = await userCollection.findOne({ email })
+
+            if (userExist) {
+                return res.send({ message: 'user exists already' })
+            }
+
+            const result = await userCollection.insertOne(user);
+            res.send(result)
+        })
+
+
+        app.get('/users', async (req, res) => {
+
+            const cursor = userCollection.find()
+            const result = await cursor.toArray();
+            res.send(result);
+        })
+
+        app.patch('/users/:id', async (req, res) => {
+            const {role} = req.body;
+            const id = req.params.id;
+            const query = { _id: new ObjectId(id) };
+            const updated={
+                $set:{role}
+            }
+
+            const result=await userCollection.updateOne(query,updated);
+            res.send(result)
+        })
+
+
+        // riders api
+
+        app.post('/riders', async (req, res) => {
+            const rider = req.body;
+
+            const result = await ridersCollection.insertOne(rider)
+            res.send(result);
+
+
+        })
+
+        app.get('/riders', async (req, res) => {
+            const query = {};
+
+            if (req.query.status) {
+                query.status = req.query.status;
+            }
+            const cursor = ridersCollection.find(query).sort({ appliedAt: -1 })
+            const result = await cursor.toArray()
+            res.send(result)
+        })
+
+
+        app.patch('/riders/:id', async (req, res) => {
+            const status = req.body.status;
+            const id = req.params.id;
+            const query = { _id: new ObjectId(id) }
+            const updatedDoc = {
+                $set: {
+                    status: status
+                }
+            }
+
+            const result = await ridersCollection.updateOne(query, updatedDoc);
+
+            if (status === 'approved') {
+                const email = req.body.email;
+                const userQuery = { email }
+                const updateUser = {
+                    $set: {
+                        role: 'rider'
+                    }
+                }
+                const userResult = await userCollection.updateOne(userQuery, updateUser)
+                const userResult2 = await ridersCollection.updateOne(userQuery, updateUser)
+            }
+
+
+
+            res.send(result);
+        })
+
 
 
         // parcel api
